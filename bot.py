@@ -210,7 +210,7 @@ def main():
     print("按 Ctrl+C 停止机器人")
     print("=" * 50)
     
-    # 启动轮询（带冲突重试机制）
+    # 启动轮询（带冲突重试机制）- 已修复参数错误
     max_retries = 5
     retry_delay = 10  # 秒
     
@@ -219,8 +219,7 @@ def main():
             print(f"启动尝试 {attempt + 1}/{max_retries}")
             application.run_polling(
                 drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-                close_loop_on_sigint=False
+                allowed_updates=Update.ALL_TYPES
             )
             break  # 如果成功，跳出循环
         except Conflict as e:
