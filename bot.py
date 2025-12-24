@@ -1,17 +1,19 @@
 import logging
 import os
+import sys
+import time
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import Application, MessageHandler, filters, CommandHandler
 import requests
-import json
 
 # 加载环境变量
 load_dotenv()
 
 # 获取配置
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 TARGET_LANGUAGE = os.getenv("TARGET_LANGUAGE", "en")
 
 # 设置日志
@@ -117,7 +119,7 @@ async def handle_message(update: Update, context):
             # 发送翻译结果
             reply_text = f"🌐 翻译成英语:\n{translated}"
             
-            # 可选：回复原消息
+            # 回复原消息
             await update.message.reply_text(
                 reply_text,
                 reply_to_message_id=update.message.message_id
@@ -157,8 +159,14 @@ async def status_command(update: Update, context):
     """
     /status 命令处理
     """
+    # 检查环境变量
+    token_status = "✅ 已设置" if TELEGRAM_TOKEN else "❌ 未设置"
+    api_key_status = "✅ 已设置" if DEEPSEEK_API_KEY else "❌ 未设置"
+    
     await update.message.reply_text(
-        "✅ 机器人运行正常！\n"
+        "📊 机器人状态\n"
+        f"Telegram Token: {token_status}\n"
+        f"DeepSeek API Key: {api_key_status}\n"
         f"目标语言：英语\n"
         f"支持翻译：中文 → 英语，他加禄语 → 英语"
     )
@@ -167,12 +175,16 @@ def main():
     """主函数"""
     # 检查配置
     if not TELEGRAM_TOKEN:
-        logger.error("未找到 TELEGRAM_TOKEN，请在 .env 文件中设置")
-        return
+        logger.error("未找到 TELEGRAM_TOKEN，请在环境变量中设置")
+        print("错误：未找到 TELEGRAM_TOKEN")
+        print("请在Koyeb的Environment Variables中设置：TELEGRAM_TOKEN")
+        sys.exit(1)
     
     if not DEEPSEEK_API_KEY:
-        logger.error("未找到 DEEPSEEK_API_KEY，请在 .env 文件中设置")
-        return
+        logger.error("未找到 DEEPSEEK_API_KEY，请在环境变量中设置")
+        print("错误：未找到 DEEPSEEK_API_KEY")
+        print("请在Koyeb的Environment Variables中设置：DEEPSEEK_API_KEY")
+        sys.exit(1)
     
     # 创建应用
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -198,8 +210,30 @@ def main():
     print("按 Ctrl+C 停止机器人")
     print("=" * 50)
     
-    # 开始轮询
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # 启动轮询（带冲突重试机制）
+    max_retries = 5
+    retry_delay = 10  # 秒
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"启动尝试 {attempt + 1}/{max_retries}")
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+                close_loop_on_sigint=False
+            )
+            break  # 如果成功，跳出循环
+        except Conflict as e:
+            print(f"检测到冲突错误: {e}")
+            if attempt < max_retries - 1:
+                print(f"等待 {retry_delay} 秒后重试...")
+                time.sleep(retry_delay)
+            else:
+                print("达到最大重试次数，停止尝试")
+                raise
+        except Exception as e:
+            print(f"其他错误: {e}")
+            raise
 
 if __name__ == "__main__":
     main()
