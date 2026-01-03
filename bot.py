@@ -13,6 +13,7 @@ import time
 import asyncio
 import subprocess
 import psutil
+import re
 from datetime import datetime
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
@@ -335,31 +336,56 @@ def translate_with_deepseek(text: str, source_lang_hint: Optional[str] = None, t
 
 def detect_language_hint(text: str) -> Optional[str]:
     """
-    简单语言检测
+    优化的语言检测 - 避免英语误判
     返回: 'zh'(中文), 'tl'(他加禄语), 'ur'(乌尔都语), 或 None
     """
     if not text:
         return None
     
-    # 检测中文字符（Unicode范围）
-    if any('\u4e00' <= char <= '\u9fff' for char in text):
+    text = text.strip()
+    
+    # 1. 明确的中文检测（最可靠）
+    chinese_chars = sum(1 for char in text if '\u4e00' <= char <= '\u9fff')
+    if chinese_chars >= 1:  # 至少1个中文字符
         return "zh"
     
-    # 检测他加禄语常见词汇
-    tagalog_keywords = [
-        'ako', 'ikaw', 'siya', 'kami', 'kayo', 'sila',
-        'maganda', 'salamat', 'paalam', 'mahal', 'oo', 'hindi',
-        'kumusta', 'mabuti', 'pangalan', 'ano', 'saan', 'kailan',
-        'po', 'opo', 'hindi po', 'sige', 'tingnan', 'maraming'
-    ]
-    text_lower = text.lower()
-    if any(keyword in text_lower for keyword in tagalog_keywords):
-        return "tl"
-    
-    # 检测乌尔都语字符（阿拉伯文字符范围）
-    if any('\u0600' <= char <= '\u06FF' for char in text):
+    # 2. 明确的乌尔都语检测（阿拉伯文字符）
+    urdu_chars = sum(1 for char in text if '\u0600' <= char <= '\u06FF')
+    if urdu_chars >= 1:  # 至少1个乌尔都语字符
         return "ur"
     
+    # 3. 保守的他加禄语检测
+    # 只检测明确的他加禄语短语，避免英语误判
+    tagalog_exact_phrases = [
+        'salamat po', 'magandang umaga', 'magandang hapon', 'magandang gabi',
+        'kumusta ka', 'ano pangalan mo', 'mahal kita', 'saan ka galing',
+        'paalam na', 'ingat palagi', 'masarap ang pagkain', 'miss na kita'
+    ]
+    
+    text_lower = text.lower()
+    
+    # 先检查是否主要是英语（避免误判）
+    # 计算英语单词比例
+    words = re.findall(r'\b[a-zA-Z]+\b', text)
+    if len(words) > 3:  # 如果有多个英语单词
+        # 常见英语单词列表
+        common_english = {'the', 'and', 'you', 'that', 'for', 'with', 'this', 'have', 'from', 'not', 'but', 'what'}
+        english_word_count = sum(1 for word in words if word.lower() in common_english)
+        
+        # 如果超过30%是常见英语单词，判定为英语
+        if english_word_count / len(words) > 0.3:
+            return None
+    
+    # 检查明确的他加禄语短语
+    for phrase in tagalog_exact_phrases:
+        if phrase in text_lower:
+            # 确保不是英语偶然包含这些词
+            if len(text_lower) > len(phrase) + 5:  # 如果是长文本中的短语
+                return "tl"
+            elif text_lower == phrase or text_lower.startswith(phrase + ' ') or text_lower.endswith(' ' + phrase):
+                return "tl"
+    
+    # 4. 默认：不翻译（包括英语、混合文本、不确定的语言）
     return None
 
 # ==================== 消息处理 ====================
@@ -588,7 +614,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• 自愈系统: ✅ 已启用\n\n"
         f"📊 系统状态：\n"
         f"• 运行时间: {hours}小时 {minutes}分钟 {seconds}秒\n"
-        f"• 健康检查: ✅ 运行中 (端口 {HEALTH_CHECK_PORT})\n\n"
+        f"• 健康检查: ✅ 运行中 (端口 8000)\n\n"
         f"🔧 可用命令：\n"
         f"/start - 显示此信息\n"
         f"/help - 详细使用说明\n"
