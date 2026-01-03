@@ -146,9 +146,6 @@ class RealHealthCheckHandler(BaseHTTPRequestHandler):
     def check_telegram_connection(self):
         """检查Telegram API连接"""
         try:
-            # 测试基本的Telegram连接（最小化请求）
-            # 如果机器人主应用正常运行，这个连接应该是正常的
-            # 我们只检查必要的环境变量是否存在
             if not TELEGRAM_TOKEN or len(TELEGRAM_TOKEN) < 10:
                 logger.warning("Telegram Token异常")
                 return False
@@ -164,15 +161,13 @@ class RealHealthCheckHandler(BaseHTTPRequestHandler):
                 logger.warning("DeepSeek API Key异常")
                 return False
             
-            # 最小化的API测试（不消耗额度）
-            # 只检查密钥格式和网络可达性
+            # 最小化的API测试
             url = "https://api.deepseek.com/chat/completions"
             headers = {
                 "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
                 "Content-Type": "application/json"
             }
             
-            # 非常小的测试请求
             test_payload = {
                 "model": "deepseek-chat",
                 "messages": [{"role": "user", "content": "ping"}],
@@ -180,10 +175,8 @@ class RealHealthCheckHandler(BaseHTTPRequestHandler):
                 "stream": False
             }
             
-            # 设置短超时，只检查连接性
             response = requests.post(url, headers=headers, json=test_payload, timeout=5)
             
-            # 即使返回错误码，只要不是401/403，说明API端点可达
             if response.status_code not in [401, 403]:
                 return True
             else:
@@ -192,7 +185,7 @@ class RealHealthCheckHandler(BaseHTTPRequestHandler):
                 
         except requests.exceptions.Timeout:
             logger.warning("DeepSeek API连接超时（可能临时问题）")
-            return True  # 返回True，超时不一定是API问题
+            return True
         except Exception as e:
             logger.error(f"DeepSeek API检查失败: {e}")
             return False
@@ -201,42 +194,32 @@ class RealHealthCheckHandler(BaseHTTPRequestHandler):
         """检查进程内存使用"""
         try:
             process = psutil.Process()
-            memory_info = process.memory_info()
             memory_percent = process.memory_percent()
             
-            # 检查内存使用是否过高
-            if memory_percent > 85:  # 超过85%视为危险
+            if memory_percent > 85:
                 logger.warning(f"进程内存使用过高: {memory_percent:.1f}%")
                 return False
             
-            # 检查内存泄漏趋势（如果运行时间够长）
             uptime = time.time() - start_time
-            if uptime > 3600:  # 运行超过1小时
-                if memory_percent > 70:  # 长期运行后内存仍高
+            if uptime > 3600:
+                if memory_percent > 70:
                     logger.warning(f"可能内存泄漏: 运行{int(uptime/3600)}小时后内存{memory_percent:.1f}%")
-                    return True  # 仍返回True，这不是致命问题
+                    return True
             
             return True
         except Exception as e:
             logger.error(f"进程内存检查失败: {e}")
-            return True  # 检查失败时不视为严重问题
+            return True
     
     def check_bot_functionality(self):
         """检查机器人基本功能"""
         try:
-            # 检查是否在过去5分钟内处理过消息
-            # 这里可以扩展为更复杂的功能检查
-            current_time = time.time()
-            
-            # 简单检查：应用是否在运行
-            # 在实际中，您可能需要添加更多功能检查
             return True
         except Exception as e:
             logger.error(f"功能检查失败: {e}")
             return False
     
     def log_message(self, format, *args):
-        # 减少HTTP请求日志噪音
         logger.debug(f"HTTP健康检查请求: {self.path}")
         pass
 
@@ -246,7 +229,6 @@ def start_real_health_server(port: int = 8000) -> HTTPServer:
         server = HTTPServer(('0.0.0.0', port), RealHealthCheckHandler)
         logger.info(f"✅ 真实健康检查服务器已启动，端口: {port}")
         
-        # 在新线程中运行服务器
         def run_server():
             try:
                 server.serve_forever()
@@ -267,10 +249,6 @@ def start_real_health_server(port: int = 8000) -> HTTPServer:
 def translate_with_deepseek(text: str, source_lang_hint: Optional[str] = None, target_lang: Optional[str] = None) -> Optional[str]:
     """
     使用DeepSeek API翻译文本
-    参数:
-        text: 要翻译的文本
-        source_lang_hint: 源语言提示 ('zh'=中文, 'tl'=他加禄语, 'ur'=乌尔都语)
-        target_lang: 目标语言 ('ur'=乌尔都语, 'en'=英语)
     """
     if not text or len(text.strip()) == 0:
         return None
@@ -317,7 +295,6 @@ def translate_with_deepseek(text: str, source_lang_hint: Optional[str] = None, t
         logger.info(f"调用DeepSeek API翻译: {text[:100]}...")
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         
-        # 检查HTTP状态码
         if response.status_code == 429:
             logger.warning("DeepSeek API速率限制，请稍后重试")
             return None
@@ -380,7 +357,6 @@ def detect_language_hint(text: str) -> Optional[str]:
         return "tl"
     
     # 检测乌尔都语字符（阿拉伯文字符范围）
-    # 乌尔都语使用阿拉伯文字符，Unicode范围：\u0600-\u06FF
     if any('\u0600' <= char <= '\u06FF' for char in text):
         return "ur"
     
@@ -444,6 +420,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 target_lang_name = "乌尔都语"
                 
+            except Exception as e:
+                logger.error(f"翻译过程出错: {e}")
+                if has_processing_msg and processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except:
+                        pass
+                # 只在群组中发送错误消息
+                if update.message.chat.type in ['group', 'supergroup']:
+                    await update.message.reply_text(
+                        "❌ 翻译过程中出现错误",
+                        reply_to_message_id=update.message.message_id
+                    )
+                return
+                
         elif lang_hint == "tl":
             # 他加禄语 -> 英语
             logger.info(f"检测到他加禄语，开始翻译成英语...")
@@ -480,6 +471,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         pass
                 
                 target_lang_name = "英语"
+                
+            except Exception as e:
+                logger.error(f"翻译过程出错: {e}")
+                if has_processing_msg and processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except:
+                        pass
+                # 只在群组中发送错误消息
+                if update.message.chat.type in ['group', 'supergroup']:
+                    await update.message.reply_text(
+                        "❌ 翻译过程中出现错误",
+                        reply_to_message_id=update.message.message_id
+                    )
+                return
                 
         elif lang_hint == "ur":
             # 乌尔都语 -> 英语
@@ -518,6 +524,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 target_lang_name = "英语"
                 
+            except Exception as e:
+                logger.error(f"翻译过程出错: {e}")
+                if has_processing_msg and processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except:
+                        pass
+                # 只在群组中发送错误消息
+                if update.message.chat.type in ['group', 'supergroup']:
+                    await update.message.reply_text(
+                        "❌ 翻译过程中出现错误",
+                        reply_to_message_id=update.message.message_id
+                    )
+                return
+                
         else:
             # 未检测到支持的语言，不翻译
             return
@@ -538,7 +559,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info("翻译结果与原文相同，跳过发送")
         else:
             logger.warning("翻译失败，返回None")
-            # 只在群组中发送错误消息，避免私聊骚扰
+            # 只在群组中发送错误消息
             if update.message.chat.type in ['group', 'supergroup']:
                 await update.message.reply_text(
                     "❌ 翻译失败，请稍后重试",
@@ -547,11 +568,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
     except Exception as e:
         logger.error(f"处理消息时出错: {e}")
-        if 'has_processing_msg' in locals() and has_processing_msg and 'processing_msg' in locals() and processing_msg:
-            try:
-                await processing_msg.delete()
-            except:
-                pass
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
